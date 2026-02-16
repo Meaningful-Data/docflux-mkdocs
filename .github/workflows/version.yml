@@ -1,0 +1,44 @@
+name: Version Consistency Check
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and development dependencies
+        run: python -m pip install -e .[dev]
+
+      - name: Compare pyproject and package versions
+        run: |
+          python - << 'PY'
+          import pathlib
+          import tomllib
+          import docflux_mkdocs
+
+          pyproject = pathlib.Path("pyproject.toml")
+          version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+          module_version = docflux_mkdocs.__version__
+
+          if version != module_version:
+              raise SystemExit(
+                  f"Version mismatch detected: pyproject.toml={version}, docflux_mkdocs.__version__={module_version}"
+              )
+
+          print(f"Versions match: {version}")
+          PY

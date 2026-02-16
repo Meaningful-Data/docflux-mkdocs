@@ -68,9 +68,7 @@ def test_build_chrome_pdf_command() -> None:
         chrome_extra_args=["--virtual-time-budget=1000"],
     )
 
-    command = plugin._build_chrome_pdf_command(
-        Path("/tmp/in.html"), Path("/tmp/out.pdf")
-    )
+    command = plugin._build_chrome_pdf_command(Path("/tmp/in.html"), Path("/tmp/out.pdf"))
 
     assert command[0] == "google-chrome-stable"
     assert "--headless" in command
@@ -138,9 +136,7 @@ def test_replace_mermaid_blocks_creates_image_links(tmp_path: Path, monkeypatch)
     assert len(rendered) == 1
 
 
-def test_replace_mermaid_blocks_falls_back_when_render_fails(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_replace_mermaid_blocks_falls_back_when_render_fails(tmp_path: Path, monkeypatch) -> None:
     plugin = ExportPlugin()
     _load_plugin_config(plugin, mermaid_mode="pre_render", mermaid_fail_on_error=False)
     output_dir = tmp_path / "exports"

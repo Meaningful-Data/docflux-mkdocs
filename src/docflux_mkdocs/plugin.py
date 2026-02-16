@@ -16,9 +16,7 @@ from mkdocs.plugins import BasePlugin
 from mkdocs.structure.pages import Page
 
 LOG = logging.getLogger("mkdocs.plugins.mkdocs_export")
-MERMAID_BLOCK_RE: Final[re.Pattern[str]] = re.compile(
-    r"```mermaid\s*\n(.*?)```", re.DOTALL
-)
+MERMAID_BLOCK_RE: Final[re.Pattern[str]] = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
 PANDOC_FROM_FORMAT: Final[str] = "markdown+pipe_tables+grid_tables+table_captions+fenced_divs"
 
 
@@ -196,9 +194,7 @@ class ExportPlugin(BasePlugin):
 
         reference_doc = self.config["docx_reference_doc"]
         if reference_doc:
-            command.extend(
-                ["--reference-doc", str(self._resolve_project_path(reference_doc))]
-            )
+            command.extend(["--reference-doc", str(self._resolve_project_path(reference_doc))])
 
         command.extend(self.config["docx_extra_args"])
         command.extend(self.config["pandoc_extra_args"])
@@ -278,9 +274,7 @@ class ExportPlugin(BasePlugin):
         except FileNotFoundError as exc:
             raise PluginError(f"Executable not found: {command[0]}") from exc
         except subprocess.TimeoutExpired as exc:
-            raise PluginError(
-                f"{context} timed out after {exc.timeout} seconds."
-            ) from exc
+            raise PluginError(f"{context} timed out after {exc.timeout} seconds.") from exc
         except subprocess.CalledProcessError as exc:
             diagnostics = self._extract_diagnostics(exc)
             raise PluginError(
@@ -317,7 +311,7 @@ class ExportPlugin(BasePlugin):
             if not content.lstrip().startswith("#"):
                 content = f"# {page.title}\n\n{content}" if content else f"# {page.title}"
             chunks.append(content)
-        separator = "\n\n\\newpage\n<div style=\"page-break-before: always;\"></div>\n\n"
+        separator = '\n\n\\newpage\n<div style="page-break-before: always;"></div>\n\n'
         return separator.join(chunks) + "\n"
 
     def _replace_mermaid_blocks(self, markdown: str, output_dir: Path) -> str:
@@ -367,10 +361,10 @@ class ExportPlugin(BasePlugin):
                 pptr_cfg = Path(temp_dir) / "puppeteer-config.json"
                 pptr_cfg.write_text(
                     (
-                        '{'
+                        "{"
                         f'"executablePath":"{mermaid_chrome_path}",'
                         '"args":["--no-sandbox","--disable-setuid-sandbox"]'
-                        '}'
+                        "}"
                     ),
                     encoding="utf-8",
                 )
