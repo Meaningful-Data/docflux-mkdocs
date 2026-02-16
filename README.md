@@ -2,11 +2,12 @@
 
 DocFlux MkDocs is a MkDocs plugin that exports documentation to **DOCX** and **PDF** with one configuration surface.
 
-Status: early MVP scaffold. The current implementation focuses on a reliable single-file export path with:
+Status: early MVP scaffold. The current implementation includes:
 
 - Pandoc DOCX export.
 - Pandoc HTML + headless Chrome PDF export.
 - Optional Mermaid pre-render (`mmdc`) into PNG for DOCX/PDF compatibility.
+- Single combined export mode and split-by-top-level-nav export mode.
 
 ## Goals
 
@@ -43,6 +44,7 @@ plugins:
       toc: true
       toc_depth: 3
       docx_reference_doc: templates/reference.docx
+      docx_update_fields_on_open: true
       docx_extra_args: []
       pdf_strategy: chrome
       pdf_engine: xelatex
@@ -64,6 +66,15 @@ plugins:
 ```
 
 Legacy alias: `mkdocs-export` is still available for backward compatibility.
+
+## Export modes
+
+- `single_file: true`: generate one artifact per format (`<filename>.<ext>`).
+- `single_file: false`: generate one artifact per top-level nav tab per format (`<filename>-<tab>.<ext>`), for example `project-docs-foundation.docx`.
+
+## Notes on DOCX
+
+- `docx_update_fields_on_open: true` (default) adds Word's `updateFields` setting so TOC and page numbers refresh automatically when opening the generated document.
 
 ## Notes on PDF strategies
 

@@ -6,20 +6,25 @@ import re
 import subprocess
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Final
+import xml.etree.ElementTree as ET
 
 from mkdocs.config import config_options
 from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.exceptions import PluginError
 from mkdocs.plugins import BasePlugin
+from mkdocs.structure.nav import Link, Navigation, Section
 from mkdocs.structure.pages import Page
 
 LOG = logging.getLogger("mkdocs.plugins.mkdocs_export")
 MERMAID_BLOCK_RE: Final[re.Pattern[str]] = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
 PANDOC_FROM_FORMAT: Final[str] = "markdown+pipe_tables+grid_tables+table_captions+fenced_divs"
+DOCX_SETTINGS_PATH: Final[str] = "word/settings.xml"
+WORDPROCESSING_NS: Final[str] = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
 @dataclass
@@ -27,6 +32,13 @@ class CollectedPage:
     src_path: str
     title: str
     markdown: str
+
+
+@dataclass
+class NavExportGroup:
+    title: str
+    slug: str
+    page_src_paths: list[str]
 
 
 class ExportPlugin(BasePlugin):
@@ -56,6 +68,7 @@ class ExportPlugin(BasePlugin):
             "docx_extra_args",
             config_options.ListOfItems(config_options.Type(str), default=[]),
         ),
+        ("docx_update_fields_on_open", config_options.Type(bool, default=True)),
         (
             "pandoc_extra_args",
             config_options.ListOfItems(config_options.Type(str), default=[]),
@@ -108,6 +121,7 @@ class ExportPlugin(BasePlugin):
     def __init__(self) -> None:
         super().__init__()
         self._pages: list[CollectedPage] = []
+        self._nav_groups: list[NavExportGroup] = []
         self._project_root = Path.cwd()
 
     def on_config(self, config: MkDocsConfig) -> MkDocsConfig:
@@ -115,16 +129,21 @@ class ExportPlugin(BasePlugin):
             return config
 
         self._pages = []
+        self._nav_groups = []
         docs_dir = Path(config["docs_dir"])
         if docs_dir.is_absolute():
             self._project_root = docs_dir.resolve().parent
         elif config.config_file_path:
             self._project_root = Path(config.config_file_path).resolve().parent
 
-        if not self.config["single_file"]:
-            raise PluginError("single_file=false is not implemented yet")
-
         return config
+
+    def on_nav(self, nav: Navigation, **kwargs: object) -> Navigation:
+        if not self.config["enabled"]:
+            return nav
+
+        self._nav_groups = self._build_nav_groups(nav)
+        return nav
 
     def on_page_markdown(self, markdown: str, page: Page, **kwargs: object) -> str:
         if not self.config["enabled"]:
@@ -151,6 +170,10 @@ class ExportPlugin(BasePlugin):
         output_dir = self._resolve_output_dir(Path(config["site_dir"]))
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        if not self.config["single_file"]:
+            self._export_by_nav_group(output_dir)
+            return
+
         combined_markdown = self._build_combined_markdown(self._pages, output_dir)
         for fmt in self.config["formats"]:
             target = output_dir / f"{self.config['filename']}.{fmt}"
@@ -159,12 +182,109 @@ class ExportPlugin(BasePlugin):
                 continue
             self._export_pdf(combined_markdown, target)
 
+    def _export_by_nav_group(self, output_dir: Path) -> None:
+        pages_by_src = {page.src_path: page for page in self._pages}
+        if not self._nav_groups:
+            raise PluginError(
+                "single_file=false requires navigation data but no nav groups were collected."
+            )
+
+        for group in self._nav_groups:
+            ordered_pages = [
+                pages_by_src[src_path]
+                for src_path in group.page_src_paths
+                if src_path in pages_by_src
+            ]
+            if not ordered_pages:
+                LOG.warning("Skipping nav group '%s' because no pages were collected.", group.title)
+                continue
+
+            combined_markdown = self._build_combined_markdown(ordered_pages, output_dir)
+            for fmt in self.config["formats"]:
+                target = output_dir / f"{self.config['filename']}-{group.slug}.{fmt}"
+                if fmt == "docx":
+                    self._export_docx(combined_markdown, target)
+                    continue
+                self._export_pdf(combined_markdown, target)
+
+    def _build_nav_groups(self, nav: Navigation) -> list[NavExportGroup]:
+        groups: list[NavExportGroup] = []
+        used_slugs: set[str] = set()
+
+        for item in nav.items:
+            src_paths = self._collect_page_src_paths(item)
+            if not src_paths:
+                continue
+            title = (item.title or "section").strip() or "section"
+            base_slug = self._slugify_title(title)
+            slug = base_slug
+            suffix = 2
+            while slug in used_slugs:
+                slug = f"{base_slug}-{suffix}"
+                suffix += 1
+            used_slugs.add(slug)
+            groups.append(NavExportGroup(title=title, slug=slug, page_src_paths=src_paths))
+
+        return groups
+
+    def _collect_page_src_paths(self, item: Page | Section | Link) -> list[str]:
+        if item.is_page:
+            return [item.file.src_path]
+
+        children = item.children or []
+        src_paths: list[str] = []
+        for child in children:
+            src_paths.extend(self._collect_page_src_paths(child))
+        return src_paths
+
+    @staticmethod
+    def _slugify_title(value: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
+        return slug or "section"
+
     def _export_docx(self, markdown: str, output_path: Path) -> None:
         with TemporaryDirectory(prefix="mkdocs-export-") as temp_dir:
             input_path = Path(temp_dir) / "combined.md"
             input_path.write_text(markdown, encoding="utf-8")
             command = self._build_docx_command(input_path, output_path)
             self._run_command(command, "DOCX export")
+            if self.config["docx_update_fields_on_open"]:
+                self._enable_docx_update_fields(output_path)
+
+    def _enable_docx_update_fields(self, output_path: Path) -> None:
+        with zipfile.ZipFile(output_path, "r") as source_archive:
+            if DOCX_SETTINGS_PATH not in source_archive.namelist():
+                LOG.warning(
+                    "Skipping DOCX field-update flag for %s because %s is missing.",
+                    output_path,
+                    DOCX_SETTINGS_PATH,
+                )
+                return
+
+            settings_xml = source_archive.read(DOCX_SETTINGS_PATH)
+            archive_items = source_archive.infolist()
+
+        settings_root = ET.fromstring(settings_xml)
+        update_fields = settings_root.find(f"{{{WORDPROCESSING_NS}}}updateFields")
+        if update_fields is None:
+            update_fields = ET.Element(f"{{{WORDPROCESSING_NS}}}updateFields")
+            settings_root.append(update_fields)
+        update_fields.set(f"{{{WORDPROCESSING_NS}}}val", "true")
+
+        updated_settings = ET.tostring(settings_root, encoding="utf-8", xml_declaration=True)
+
+        with TemporaryDirectory(prefix="mkdocs-export-docx-") as temp_dir:
+            updated_docx_path = Path(temp_dir) / "updated.docx"
+            with zipfile.ZipFile(output_path, "r") as source_archive:
+                with zipfile.ZipFile(updated_docx_path, "w") as updated_archive:
+                    for item in archive_items:
+                        content = (
+                            updated_settings
+                            if item.filename == DOCX_SETTINGS_PATH
+                            else source_archive.read(item.filename)
+                        )
+                        updated_archive.writestr(item, content)
+            updated_docx_path.replace(output_path)
 
     def _export_pdf(self, markdown: str, output_path: Path) -> None:
         strategy = self.config["pdf_strategy"]
