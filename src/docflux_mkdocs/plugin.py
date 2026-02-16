@@ -4,6 +4,8 @@ import hashlib
 import logging
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -83,7 +85,12 @@ class ExportPlugin(BasePlugin):
             "mermaid_mode",
             config_options.Choice(("preserve", "pre_render"), default="preserve"),
         ),
+        (
+            "mermaid_renderer",
+            config_options.Choice(("mmdc", "kroki"), default="mmdc"),
+        ),
         ("mmdc_path", config_options.Type(str, default="mmdc")),
+        ("mermaid_kroki_url", config_options.Type(str, default="https://kroki.io")),
         ("mermaid_background", config_options.Type(str, default="white")),
         ("mermaid_width", config_options.Type(int, default=1600)),
         ("mermaid_timeout_seconds", config_options.Type(int, default=45)),
@@ -342,6 +349,10 @@ class ExportPlugin(BasePlugin):
         return MERMAID_BLOCK_RE.sub(_replace, markdown)
 
     def _render_mermaid(self, mmd_path: Path, png_path: Path) -> None:
+        if self.config["mermaid_renderer"] == "kroki":
+            self._render_mermaid_via_kroki(mmd_path, png_path)
+            return
+
         command = [
             self.config["mmdc_path"],
             "-i",
@@ -381,3 +392,31 @@ class ExportPlugin(BasePlugin):
             "Mermaid pre-render",
             timeout=self.config["mermaid_timeout_seconds"],
         )
+
+    def _render_mermaid_via_kroki(self, mmd_path: Path, png_path: Path) -> None:
+        mermaid_source = mmd_path.read_text(encoding="utf-8")
+        endpoint = f"{self.config['mermaid_kroki_url'].rstrip('/')}/mermaid/png"
+        request = urllib.request.Request(
+            endpoint,
+            data=mermaid_source.encode("utf-8"),
+            method="POST",
+            headers={
+                "Accept": "image/png",
+                "Content-Type": "text/plain; charset=utf-8",
+                "User-Agent": "docflux-mkdocs",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.config["mermaid_timeout_seconds"],
+            ) as response:
+                status_code = response.getcode()
+                if status_code != 200:
+                    raise PluginError(f"Kroki returned unexpected status code {status_code}.")
+                png_path.write_bytes(response.read())
+        except urllib.error.HTTPError as exc:
+            raise PluginError(f"Kroki request failed with HTTP {exc.code}.") from exc
+        except urllib.error.URLError as exc:
+            raise PluginError(f"Kroki request failed: {exc.reason}") from exc

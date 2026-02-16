@@ -1,5 +1,7 @@
+import urllib.error
 from pathlib import Path
 
+import pytest
 from mkdocs.exceptions import PluginError
 
 from docflux_mkdocs.plugin import CollectedPage, ExportPlugin
@@ -26,7 +28,9 @@ def _load_plugin_config(plugin: ExportPlugin, **overrides: object) -> None:
         "chrome_path": "google-chrome",
         "chrome_extra_args": [],
         "mermaid_mode": "preserve",
+        "mermaid_renderer": "mmdc",
         "mmdc_path": "mmdc",
+        "mermaid_kroki_url": "https://kroki.io",
         "mermaid_background": "white",
         "mermaid_width": 1600,
         "mermaid_timeout_seconds": 45,
@@ -150,3 +154,72 @@ def test_replace_mermaid_blocks_falls_back_when_render_fails(tmp_path: Path, mon
     transformed = plugin._replace_mermaid_blocks(markdown, output_dir)
 
     assert transformed == markdown
+
+
+def test_render_mermaid_via_kroki_writes_png(tmp_path: Path, monkeypatch) -> None:
+    plugin = ExportPlugin()
+    _load_plugin_config(
+        plugin,
+        mermaid_mode="pre_render",
+        mermaid_renderer="kroki",
+        mermaid_kroki_url="https://kroki.example",
+    )
+
+    mmd_path = tmp_path / "diagram.mmd"
+    png_path = tmp_path / "diagram.png"
+    mmd_path.write_text("graph TD\nA-->B\n", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return 200
+
+        def read(self) -> bytes:
+            return b"fake-png-bytes"
+
+    def fake_urlopen(request: object, timeout: int) -> FakeResponse:
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    plugin._render_mermaid(mmd_path, png_path)
+
+    assert png_path.read_bytes() == b"fake-png-bytes"
+    request = captured["request"]
+    assert request.full_url == "https://kroki.example/mermaid/png"
+    assert request.data == b"graph TD\nA-->B\n"
+    assert captured["timeout"] == 45
+
+
+def test_render_mermaid_via_kroki_raises_plugin_error_on_http_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plugin = ExportPlugin()
+    _load_plugin_config(plugin, mermaid_mode="pre_render", mermaid_renderer="kroki")
+
+    mmd_path = tmp_path / "diagram.mmd"
+    png_path = tmp_path / "diagram.png"
+    mmd_path.write_text("graph TD\nA-->B\n", encoding="utf-8")
+
+    def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.HTTPError(
+            "https://kroki.io/mermaid/png",
+            500,
+            "Internal Server Error",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(PluginError, match="Kroki request failed with HTTP 500"):
+        plugin._render_mermaid(mmd_path, png_path)

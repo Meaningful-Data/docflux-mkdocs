@@ -50,7 +50,9 @@ plugins:
       chrome_path: google-chrome
       chrome_extra_args: []
       mermaid_mode: pre_render
+      mermaid_renderer: mmdc
       mmdc_path: mmdc
+      mermaid_kroki_url: https://kroki.io
       mermaid_background: white
       mermaid_width: 1600
       mermaid_timeout_seconds: 45
@@ -71,6 +73,8 @@ Legacy alias: `mkdocs-export` is still available for backward compatibility.
 ## Notes on Mermaid
 
 - `mermaid_mode: pre_render` replaces fenced Mermaid blocks with PNG images before export.
+- `mermaid_renderer: mmdc` uses Mermaid CLI (local tool, may require Chromium).
+- `mermaid_renderer: kroki` renders Mermaid diagrams through a Kroki server and avoids local Chrome/Chromium.
 - If Mermaid rendering fails and `mermaid_fail_on_error: false`, the plugin keeps the original Mermaid code block and continues.
 
 ## Development
